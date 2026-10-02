@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Python Chatbot IDE</title>
+<style>
+:root{--bg:#1b1c23;--pn:#252732;--ln:#3a3d4d;--tx:#e6e6ef;--mu:#8b8fa3;--ac:#4f9cf9;--er:#ff6b6b;--ok:#6bd68b;--mono:ui-monospace,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--tx);font:14px system-ui,sans-serif}
+body{display:flex;flex-direction:column}
+header{display:flex;gap:8px;align-items:center;padding:8px 12px;background:var(--pn);border-bottom:1px solid var(--ln);flex-wrap:wrap}
+button{background:#33364a;color:var(--tx);border:1px solid var(--ln);border-radius:6px;padding:6px 12px;cursor:pointer;font:inherit}
+button:hover:not(:disabled){background:#40445c}button:disabled{opacity:.4;cursor:default}
+button.pri{background:#2d7d46;border-color:#2d7d46}
+#fname{flex:1;max-width:320px;min-width:120px;background:var(--bg);color:var(--tx);border:1px solid var(--ln);border-radius:6px;padding:6px 10px;font:14px var(--mono)}
+#fname.bad{border-color:var(--er)}
+.sp{flex:1}#st{color:var(--mu);font-size:12px}
+#main{flex:1;min-height:0;display:grid;grid-template-columns:170px 1fr 1fr}
+#main>*{min-width:0;min-height:0;display:flex;flex-direction:column;border-right:1px solid var(--ln)}
+.h{padding:6px 10px;background:#20222c;color:var(--mu);font-size:12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--ln)}
+.h button{padding:2px 8px;font-size:12px}
+#flist{overflow:auto;flex:1}
+.f{display:flex;justify-content:space-between;align-items:center;padding:7px 10px;cursor:pointer;font-family:var(--mono);font-size:13px;word-break:break-all}
+.f:hover{background:#2c2f3c}.f.on{background:#33405e}
+.f button{border:0;background:none;padding:0 4px;color:var(--mu)}.f button:hover{color:var(--er)!important;background:none!important}
+#wrap{position:relative;flex:1;min-height:0;display:flex;overflow:hidden;background:var(--pn)}
+#gut{width:46px;flex:none;overflow:hidden;text-align:right;padding:8px 8px 20px 0;color:var(--mu);font:14px/20px var(--mono);background:#20222c;border-right:1px solid var(--ln)}
+#gut .er{color:var(--er);font-weight:bold}
+#hl{position:absolute;left:46px;right:0;height:20px;background:rgba(255,107,107,.2);display:none;pointer-events:none}
+#code{flex:1;position:relative;z-index:1;border:0;outline:0;resize:none;background:transparent;color:var(--tx);font:14px/20px var(--mono);padding:8px 8px 20px 10px;white-space:pre;overflow:auto;tab-size:4}
+#term{flex:1;overflow:auto;background:#0c0d10;color:#d8f5d8;font:14px/1.4 var(--mono);padding:10px;white-space:pre-wrap;word-break:break-word;cursor:text}
+#term .e{color:var(--er)}#term .m{color:var(--mu)}#term .u{color:#fff}
+.tin{background:transparent;border:0;outline:0;color:#fff;font:inherit;padding:0;width:1ch;caret-color:#fff}
+#errbar{padding:8px 12px;font:13px var(--mono);border-top:1px solid var(--ln)}
+#errbar.ok{background:#1d2a22;color:var(--ok)}#errbar.bad{background:#3a1f24;color:var(--er);cursor:pointer}
+@media(max-width:800px){#main{grid-template-columns:1fr;grid-template-rows:auto 1fr 1fr}#flist{max-height:80px}}
+</style></head><body>
+<header>
+<b>🐍 Chatbot IDE</b>
+<input id="fname" placeholder="file name" spellcheck="false" autocomplete="off" aria-label="File name">
+<button id="run" class="pri">▶ Run</button><button id="stop" disabled>■ Stop</button>
+<span class="sp"></span><span id="st"></span>
+<button id="dl">⬇ Download all (JSON)</button>
+</header>
+<div id="main">
+<aside><div class="h">Files <button id="new">+ New</button></div><div id="flist"></div></aside>
+<section><div class="h">Code <span>Ctrl+Enter to run</span></div>
+<div id="wrap"><div id="hl"></div><div id="gut"></div>
+<textarea id="code" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" wrap="off" aria-label="Code editor"></textarea></div></section>
+<section><div class="h">Terminal</div><div id="term"></div></section>
+</div>
+<div id="errbar" class="ok"></div>
+<script>
+const $=id=>document.getElementById(id);
+const O=o=>Object.assign(Object.create(null),o);
+class F{constructor(v){this.v=v}}
+class PyErr{constructor(type,msg,line){this.type=type;this.msg=msg;this.line=line}}
+class Stop{constructor(q){this.q=q}}
+class Fn{constructor(name,ps,b){this.name=name;this.ps=ps;this.b=b}}
+class Mod{constructor(a){this.a=a}}
+class Scope{constructor(){this.v=new Map();this.g=null}}
+
+/* ---------- lexer ---------- */
+const OPS3=['**=','//='],OPS2=['==','!=','<=','>=','+=','-=','*=','/=','%=','**','//'];
+function lex(src){
+  src=src.replace(/\r\n?/g,'\n');
+  const T=[],ind=[0],br=[];let i=0,line=1,bol=true;
+  const push=(t,v)=>T.push({t,v,line});
+  const se=(m,l)=>new PyErr('SyntaxError',m,l||line);
+  function readStr(isF){
+    const q=src[i],tri=src.substr(i,3)==q+q+q,start=line;
+    i+=tri?3:1;let buf='';const parts=[];
+    for(;;){
+      if(i>=src.length||(!tri&&src[i]=='\n'))throw se('unterminated string literal',start);
+      const ch=src[i];
+      if(tri?src.substr(i,3)==q+q+q:ch==q){i+=tri?3:1;break}
+      if(ch=='\n')line++;
+      if(ch=='\\'){
+        const n=src[i+1],mp={n:'\n',t:'\t','\\':'\\',"'":"'",'"':'"'};
+        if(n=='\n'){i+=2;line++;continue}
+        if(n in mp){buf+=mp[n];i+=2;continue}
+        buf+=ch;i++;continue}
+      if(isF&&ch=='{'){
+        if(src[i+1]=='{'){buf+='{';i+=2;continue}
+        let j=i+1,d=0,f=-1,qq=null;
+        for(;j<src.length;j++){const x=src[j];
+          if(qq){if(x==qq)qq=null;continue}
+          if(x=="'"||x=='"'){qq=x;continue}
+          if('([{'.includes(x))d++;
+          else if(')]'.includes(x))d--;
+          else if(x=='}'){if(d==0)break;d--}
+          else if(x==':'&&d==0&&f<0)f=j;
+          else if(x=='\n'&&!tri)break}
+        if(src[j]!='}')throw se("f-string: expecting '}'");
+        if(buf)parts.push(buf);buf='';
+        parts.push({ex:src.slice(i+1,f<0?j:f),fm:f<0?'':src.slice(f+1,j),line});
+        i=j+1;continue}
+      if(isF&&ch=='}'){if(src[i+1]=='}'){buf+='}';i+=2;continue}throw se("f-string: single '}' is not allowed")}
+      buf+=ch;i++}
+    if(isF){if(buf)parts.push(buf);push('FSTR',parts)}else push('STR',buf)}
+  while(i<src.length){
+    if(bol&&!br.length){
+      let c=0,j=i;
+      while(src[j]==' '||src[j]=='\t'){c+=src[j]=='\t'?4:1;j++}
+      if(j>=src.length||src[j]=='\n'||src[j]=='#'){while(j<src.length&&src[j]!='\n')j++;i=j+1;line++;continue}
+      i=j;bol=false;
+      if(c>ind[ind.length-1]){ind.push(c);push('INDENT')}
+      else{while(c<ind[ind.length-1]){ind.pop();push('DEDENT')}
+        if(c!=ind[ind.length-1])throw new PyErr('IndentationError','unindent does not match any outer indentation level',line)}}
+    const c=src[i];let m;
+    if(c=='\n'){if(!br.length){push('NL');bol=true}line++;i++;continue}
+    if(c==' '||c=='\t'||c=='\r'){i++;continue}
+    if(c=='#'){while(i<src.length&&src[i]!='\n')i++;continue}
+    if(c=='\\'&&src[i+1]=='\n'){i+=2;line++;continue}
+    if(/[\d.]/.test(c)&&(m=/^(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/.exec(src.slice(i,i+40)))){
+      i+=m[0].length;push('NUM',/[.eE]/.test(m[0])?new F(parseFloat(m[0])):parseInt(m[0]));continue}
+    if(/[A-Za-z_]/.test(c)){
+      let j=i;while(j<src.length&&/\w/.test(src[j]))j++;
+      const w=src.slice(i,j);
+      if((w=='f'||w=='F')&&(src[j]=='"'||src[j]=="'")){i=j;readStr(true);continue}
+      push('NAME',w);i=j;continue}
+    if(c=='"'||c=="'"){readStr(false);continue}
+    const s3=src.substr(i,3),s2=src.substr(i,2);
+    if(OPS3.includes(s3)){push('OP',s3);i+=3;continue}
+    if(OPS2.includes(s2)){push('OP',s2);i+=2;continue}
+    if('+-*/%<>=()[]{},:.'.includes(c)){
+      if('([{'.includes(c))br.push([c,line]);
+      if(')]}'.includes(c)){
+        const o=br.pop();
+        if(!o)throw se(`unmatched '${c}'`);
+        if('([{'.indexOf(o[0])!=')]}'.indexOf(c))throw se(`closing parenthesis '${c}' does not match opening parenthesis '${o[0]}'`)}
+      push('OP',c);i++;continue}
+    throw se(`invalid character '${c}'`)}
+  if(br.length)throw se(`'${br[br.length-1][0]}' was never closed`,br[br.length-1][1]);
+  if(T.length&&T[T.length-1].t!='NL')push('NL');
+  while(ind.length>1){ind.pop();push('DEDENT')}
+  push('END');return T}
+
+/* ---------- parser ---------- */
+const KW=new Set(['if','elif','else','while','for','in','def','return','break','continue','pass','import','from','as','and','or','not','is','global','True','False','None']);
+function parse(T,exprOnly){
+  let p=0;
+  const pk=()=>T[p],nx=()=>T[p++];
+  const se=(m,t)=>new PyErr('SyntaxError',m,(t||pk()).line);
+  const isO=v=>pk().t=='OP'&&pk().v==v,isK=v=>pk().t=='NAME'&&pk().v==v;
+  const eatO=v=>isO(v)&&(p++,true),eatK=v=>isK(v)&&(p++,true);
+  const needO=(v,m)=>{if(!eatO(v))throw se(m||'invalid syntax')};
+  const COMMA="invalid syntax. Perhaps you forgot a comma?";
+  const okT=e=>e.k=='n'||e.k=='sub'||(e.k=='tuple'&&e.items.length&&e.items.every(okT));
+  const chk=e=>{if(!okT(e))throw new PyErr('SyntaxError',(e.k=='call'?'cannot assign to function call here':'cannot assign to expression here')+". Maybe you meant '==' instead of '='?",e.line||pk().line)};
+  const end=t0=>{if(pk().t=='NL'){p++;return}
+    throw se(t0.t=='NAME'&&t0.v=='print'?"Missing parentheses in call to 'print'. Did you mean print(...)?":'invalid syntax')};
+  function block(ln){
+    needO(':',"expected ':'");
+    if(pk().t=='NL'){p++;
+      if(pk().t!='INDENT')throw new PyErr('IndentationError','expected an indented block',ln);
+      p++;const b=[];
+      while(pk().t!='DEDENT'&&pk().t!='END')b.push(stmt());
+      if(pk().t=='DEDENT')p++;return b}
+    return[simple()]}
+  const cond=()=>{const e=test();if(isO('='))throw se("invalid syntax. Maybe you meant '==' or ':=' instead of '='?");return e};
+  function target(){const e=postfix();chk(e);return e}
+  function stmt(){
+    const t=pk(),ln=t.line;
+    if(t.t=='INDENT')throw new PyErr('IndentationError','unexpected indent',ln);
+    if(t.t=='NAME'){
+      if(t.v=='if'||t.v=='while'){
+        p++;const c=cond(),b=block(ln);
+        if(t.v=='while')return{k:'while',c,b,line:ln};
+        let o=[];
+        if(isK('elif')){T[p].v='if';o=[stmt()]}
+        else if(isK('else')){o=block(nx().line)}
+        return{k:'if',c,b,o,line:ln}}
+      if(t.v=='for'){
+        p++;const a=[];do a.push(target());while(eatO(','));
+        const tg=a.length>1?{k:'tuple',items:a,line:ln}:a[0];
+        if(!eatK('in'))throw se('invalid syntax');
+        const it=testlist();return{k:'for',tg,it,b:block(ln),line:ln}}
+      if(t.v=='def'){
+        p++;const nm=nx();
+        if(nm.t!='NAME'||KW.has(nm.v))throw se('invalid syntax',nm);
+        needO('(',"expected '('");const ps=[];
+        while(!isO(')')){const a=nx();
+          if(a.t!='NAME'||KW.has(a.v))throw se('invalid syntax',a);
+          ps.push({n:a.v,d:eatO('=')?test():null});if(!eatO(','))break}
+        needO(')',"expected ')'");
+        return{k:'def',name:nm.v,ps,b:block(ln),line:ln}}}
+    return simple()}
+  function simple(){
+    const t=pk(),ln=t.line;let r;
+    if(t.t=='NAME'&&['break','continue','pass'].includes(t.v)){p++;r={k:t.v,line:ln}}
+    else if(isK('return')){p++;r={k:'ret',e:pk().t=='NL'?null:testlist(),line:ln}}
+    else if(isK('import')){p++;const m=nx();if(m.t!='NAME')throw se('invalid syntax',m);
+      r={k:'import',m:m.v,as:eatK('as')?nx().v:m.v,line:ln}}
+    else if(isK('from')){p++;const m=nx();if(!eatK('import'))throw se('invalid syntax');
+      const n=[];do{const a=nx();n.push([a.v,eatK('as')?nx().v:a.v])}while(eatO(','));
+      r={k:'from',m:m.v,n,line:ln}}
+    else if(isK('global')){p++;const n=[];do n.push(nx().v);while(eatO(','));r={k:'global',n,line:ln}}
+    else{
+      const e=testlist();
+      if(isO('=')){const parts=[e];while(eatO('='))parts.push(testlist());
+        const v=parts.pop();parts.forEach(chk);r={k:'asg',tg:parts,v,line:ln}}
+      else if(pk().t=='OP'&&/^([-+*%]|\/\/|\/|\*\*)=$/.test(pk().v)){
+        const op=nx().v.slice(0,-1);chk(e);r={k:'aug',tg:e,op,v:testlist(),line:ln}}
+      else r={k:'expr',e,line:ln}}
+    end(t);return r}
+  function testlist(){
+    const ln=pk().line,a=[test()];
+    if(!isO(','))return a[0];
+    while(eatO(',')){if(pk().t=='NL'||isO(')')||isO('=')||isO(':'))break;a.push(test())}
+    return{k:'tuple',items:a,line:ln}}
+  function test(){
+    const a=orT();
+    if(isK('if')){const ln=nx().line,c=orT();
+      if(!eatK('else'))throw se("expected 'else' after 'if' expression");
+      return{k:'tern',c,a,b:test(),line:ln}}
+    return a}
+  function orT(){let a=andT();while(isK('or')){const ln=nx().line;a={k:'or',a,b:andT(),line:ln}}return a}
+  function andT(){let a=notT();while(isK('and')){const ln=nx().line;a={k:'and',a,b:notT(),line:ln}}return a}
+  function notT(){if(isK('not')){const ln=nx().line;return{k:'not',a:notT(),line:ln}}return cmp()}
+  function cmp(){
+    const ln=pk().line,a=arith(),ops=[],rs=[];
+    for(;;){let op=null;const t=pk();
+      if(t.t=='OP'&&['==','!=','<','>','<=','>='].includes(t.v)){op=t.v;p++}
+      else if(isK('in')){op='in';p++}
+      else if(isK('not')&&T[p+1].t=='NAME'&&T[p+1].v=='in'){op='not in';p+=2}
+      else if(isK('is')){p++;op=eatK('not')?'is not':'is'}
+      if(!op)break;ops.push(op);rs.push(arith())}
+    return ops.length?{k:'cmp',a,ops,rs,line:ln}:a}
+  function arith(){let a=term();while(isO('+')||isO('-')){const o=nx();a={k:'bin',op:o.v,a,b:term(),line:o.line}}return a}
+  function term(){let a=fac();while(isO('*')||isO('/')||isO('//')||isO('%')){const o=nx();a={k:'bin',op:o.v,a,b:fac(),line:o.line}}return a}
+  function fac(){if(isO('-')||isO('+')){const o=nx();return{k:'un',op:o.v,a:fac(),line:o.line}}return pow()}
+  function pow(){const a=postfix();if(isO('**')){const o=nx();return{k:'bin',op:'**',a,b:fac(),line:o.line}}return a}
+  function postfix(){
+    let a=atom();
+    for(;;){const t=pk();
+      if(isO('(')){p++;const args=[],kw={};
+        while(!isO(')')){
+          if(pk().t=='NAME'&&T[p+1].t=='OP'&&T[p+1].v=='='&&!KW.has(pk().v)){const n=nx().v;p++;kw[n]=test()}else args.push(test());
+          if(!eatO(','))break}
+        needO(')',COMMA);a={k:'call',f:a,args,kw,line:t.line};continue}
+      if(isO('[')){p++;let lo=null,hi=null,sl=false;
+        if(!isO(':'))lo=test();
+        if(eatO(':')){sl=true;if(!isO(']'))hi=test()}
+        needO(']',"expected ']'");
+        a=sl?{k:'slice',a,lo,hi,line:t.line}:{k:'sub',a,i:lo,line:t.line};continue}
+      if(isO('.')){p++;const n=nx();if(n.t!='NAME')throw se('invalid syntax',n);a={k:'attr',a,n:n.v,line:t.line};continue}
+      return a}}
+  function atom(){
+    const t=nx(),line=t.line;
+    if(t.t=='NUM')return{k:'c',v:t.v,line};
+    if(t.t=='STR'){let s=t.v;while(pk().t=='STR')s+=nx().v;return{k:'c',v:s,line}}
+    if(t.t=='FSTR')return{k:'fs',line,parts:t.v.map(x=>typeof x=='string'?x:{e:subParse(x.ex,x.line),fm:x.fm})};
+    if(t.t=='NAME'){
+      if(t.v=='True')return{k:'c',v:true,line};
+      if(t.v=='False')return{k:'c',v:false,line};
+      if(t.v=='None')return{k:'c',v:null,line};
+      if(KW.has(t.v))throw se('invalid syntax',t);
+      return{k:'n',n:t.v,line}}
+    if(t.t=='OP'){
+      if(t.v=='('){if(eatO(')'))return{k:'tuple',items:[],line};const e=testlist();needO(')',COMMA);return e}
+      if(t.v=='['){const items=[];while(!isO(']')){items.push(test());if(!eatO(','))break}needO(']',COMMA);return{k:'list',items,line}}
+      if(t.v=='{'){const ks=[],vs=[];
+        while(!isO('}')){ks.push(test());needO(':',"expected ':'");vs.push(test());if(!eatO(','))break}
+        needO('}',COMMA);return{k:'dict',ks,vs,line}}}
+    throw se('invalid syntax',t)}
+  function subParse(s,line){
+    try{const tk=lex(s.trim());tk.forEach(x=>x.line=line);return parse(tk,true)}
+    catch(e){if(e instanceof PyErr)e.line=line;throw e}}
+  if(exprOnly){const e=testlist();if(pk().t!='NL')throw se('invalid syntax');return e}
+  const prog=[];while(pk().t!='END')prog.push(stmt());return prog}
+
+/* ---------- runtime helpers ---------- */
+let G,L=0,depth=0,stopped=false,cancel=null,lastY=0,running=false,err=null;
+const BRK={},CNT={};
+const E=(t,m)=>new PyErr(t,m,L);
+const tn=x=>x===null?'NoneType':typeof x=='boolean'?'bool':typeof x=='number'?'int':x instanceof F?'float':typeof x=='string'?'str':Array.isArray(x)?'list':x instanceof Map?'dict':x instanceof Mod?'module':'function';
+const isN=x=>typeof x=='number'||typeof x=='boolean'||x instanceof F;
+const nv=x=>x instanceof F?x.v:+x;
+const mk=(v,f)=>f?new F(v):v;
+const key=k=>k instanceof F?k.v:k;
+const T_=x=>!(x===null||x===false||x===0||x===''||(x instanceof F&&x.v===0)||(Array.isArray(x)&&!x.length)||(x instanceof Map&&!x.size));
+function repr(x){
+  if(x===null)return 'None';if(x===true)return 'True';if(x===false)return 'False';
+  if(typeof x=='number')return String(x);
+  if(x instanceof F){const v=x.v;if(Number.isInteger(v)&&Math.abs(v)<1e16)return v.toFixed(1);return String(v)}
+  if(typeof x=='string'){const q=x.includes("'")&&!x.includes('"')?'"':"'";return q+x.replace(/\\/g,'\\\\').replace(/\n/g,'\\n').split(q).join('\\'+q)+q}
+  if(Array.isArray(x))return '['+x.map(repr).join(', ')+']';
+  if(x instanceof Map)return '{'+[...x].map(([k,v])=>repr(k)+': '+repr(v)).join(', ')+'}';
+  if(x instanceof Fn)return '<function '+x.name+'>';
+  return '<built-in>'}
+const str=x=>typeof x=='string'?x:repr(x);
+function eq(a,b){
+  if(isN(a)&&isN(b))return nv(a)===nv(b);
+  if(Array.isArray(a)&&Array.isArray(b))return a.length==b.length&&a.every((x,i)=>eq(x,b[i]));
+  return a===b}
+const c2=(o,x,y)=>o=='<'?x<y:o=='>'?x>y:o=='<='?x<=y:x>=y;
+function ord(o,a,b){
+  if(isN(a)&&isN(b))return c2(o,nv(a),nv(b));
+  if(typeof a=='string'&&typeof b=='string')return c2(o,a,b);
+  throw E('TypeError',`'${o}' not supported between instances of '${tn(a)}' and '${tn(b)}'`)}
+function has(c,x){
+  if(typeof c=='string'){if(typeof x!='string')throw E('TypeError',`'in <string>' requires string as left operand, not ${tn(x)}`);return c.includes(x)}
+  if(Array.isArray(c))return c.some(y=>eq(x,y));
+  if(c instanceof Map)return c.has(key(x));
+  throw E('TypeError',`argument of type '${tn(c)}' is not iterable`)}
+function cop(o,a,b){
+  switch(o){case'==':return eq(a,b);case'!=':return!eq(a,b);case'in':return has(b,a);case'not in':return!has(b,a);
+    case'is':return a===b;case'is not':return a!==b;default:return ord(o,a,b)}}
+function bin(o,a,b){
+  if(isN(a)&&isN(b)){
+    const x=nv(a),y=nv(b),f=a instanceof F||b instanceof F;
+    switch(o){
+      case'+':return mk(x+y,f);case'-':return mk(x-y,f);case'*':return mk(x*y,f);
+      case'/':if(y===0)throw E('ZeroDivisionError','division by zero');return new F(x/y);
+      case'//':if(y===0)throw E('ZeroDivisionError','integer division or modulo by zero');return mk(Math.floor(x/y),f);
+      case'%':if(y===0)throw E('ZeroDivisionError','integer modulo by zero');return mk(x-Math.floor(x/y)*y,f);
+      case'**':return mk(x**y,f||y<0)}}
+  const sa=typeof a=='string',la=Array.isArray(a);
+  if(o=='+'){
+    if(sa&&typeof b=='string')return a+b;
+    if(la&&Array.isArray(b))return a.concat(b);
+    if(sa)throw E('TypeError',`can only concatenate str (not "${tn(b)}") to str`)}
+  if(o=='*'){
+    if((sa||la)&&typeof b=='number')return sa?a.repeat(Math.max(b,0)):[].concat(...Array(Math.max(b,0)).fill(a));
+    if((typeof b=='string'||Array.isArray(b))&&typeof a=='number')return bin('*',b,a)}
+  throw E('TypeError',`unsupported operand type(s) for ${o}: '${tn(a)}' and '${tn(b)}'`)}
+function idx(o,i){
+  if(o instanceof Map){const k=key(i);if(!o.has(k))throw E('KeyError',repr(i));return o.get(k)}
+  const s=typeof o=='string';
+  if(!s&&!Array.isArray(o))throw E('TypeError',`'${tn(o)}' object is not subscriptable`);
+  if(typeof i!='number')throw E('TypeError',`${tn(o)} indices must be integers or slices, not ${tn(i)}`);
+  const j=i<0?i+o.length:i;
+  if(j<0||j>=o.length)throw E('IndexError',(s?'string':'list')+' index out of range');
+  return o[j]}
+function slc(o,lo,hi){
+  if(typeof o!='string'&&!Array.isArray(o))throw E('TypeError',`'${tn(o)}' object is not subscriptable`);
+  for(const v of[lo,hi])if(v!==null&&typeof v!='number')throw E('TypeError','slice indices must be integers or None');
+  const n=o.length,f=(v,d)=>v===null?d:Math.max(0,Math.min(n,v<0?v+n:v));
+  return o.slice(f(lo,0),f(hi,n))}
+const iter=x=>{
+  if(Array.isArray(x))return x;if(typeof x=='string')return[...x];if(x instanceof Map)return[...x.keys()];
+  throw E('TypeError',`'${tn(x)}' object is not iterable`)};
+function fmt(v,sp){
+  if(!sp)return str(v);
+  const m=/^([<>^])?(\d+)?(?:\.(\d+))?([fds]?)$/.exec(sp);
+  if(!m)throw E('ValueError','Invalid format specifier');
+  let s;
+  if(isN(v)&&(m[4]=='f'||(m[3]!==undefined&&m[4]=='')))s=nv(v).toFixed(m[3]!==undefined?+m[3]:6);
+  else s=str(v);
+  const w=+m[2]||0,al=m[1]||(isN(v)?'>':'<'),d=w-s.length;
+  if(d>0)s=al=='<'?s+' '.repeat(d):al=='>'?' '.repeat(d)+s:' '.repeat(d>>1)+s+' '.repeat(d-(d>>1));
+  return s}
+function pyround(v,n){
+  const r1=x=>{const f=Math.floor(x),d=x-f;return d<.5?f:d>.5?f+1:(f%2==0?f:f+1)};
+  if(n==null)return r1(v);const p=10**n;return new F(r1(v*p)/p)}
+
+/* ---------- builtins ---------- */
+const mm=(a,o)=>{const v=a.length==1?iter(a[0]):a;if(!v.length)throw E('ValueError',(o=='<'?'min':'max')+'() iterable argument is empty');return v.reduce((m,x)=>ord(o,x,m)?x:m)};
+const wait=f=>new Promise((res,rej)=>{cancel=()=>rej(new Stop());f(res)});
+const BI=O({
+  print:(a,k)=>{out(a.map(str).join(k.sep!=null?k.sep:' ')+(k.end!=null?k.end:'\n'));return null},
+  input:a=>ask(a.length?str(a[0]):''),
+  len:a=>{const x=a[0];if(typeof x=='string'||Array.isArray(x))return x.length;if(x instanceof Map)return x.size;throw E('TypeError',`object of type '${tn(x)}' has no len()`)},
+  int:a=>{const x=a[0];
+    if(typeof x=='string'){const t=x.trim().replace(/_/g,'');if(!/^[+-]?\d+$/.test(t))throw E('ValueError',`invalid literal for int() with base 10: ${repr(x)}`);return parseInt(t)}
+    if(isN(x))return Math.trunc(nv(x));
+    throw E('TypeError',`int() argument must be a string or a number, not '${tn(x)}'`)},
+  float:a=>{const x=a[0];
+    if(typeof x=='string'){const t=x.trim();if(!/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(t))throw E('ValueError',`could not convert string to float: ${repr(x)}`);return new F(parseFloat(t))}
+    if(isN(x))return new F(nv(x));
+    throw E('TypeError',`float() argument must be a string or a number, not '${tn(x)}'`)},
+  str:a=>a.length?str(a[0]):'',
+  bool:a=>a.length?T_(a[0]):false,
+  range:a=>{
+    for(const x of a)if(typeof x!='number')throw E('TypeError',`'${tn(x)}' object cannot be interpreted as an integer`);
+    const[s,e,st]=a.length==1?[0,a[0],1]:[a[0],a[1],a[2]===undefined?1:a[2]];
+    if(st===0)throw E('ValueError','range() arg 3 must not be zero');
+    if(Math.abs((e-s)/st)>5e6)throw E('MemoryError','range is too large');
+    const r=[];for(let i=s;st>0?i<e:i>e;i+=st)r.push(i);return r},
+  abs:a=>a[0] instanceof F?new F(Math.abs(a[0].v)):Math.abs(a[0]),
+  min:a=>mm(a,'<'),max:a=>mm(a,'>'),
+  sum:a=>iter(a[0]).reduce((s,x)=>bin('+',s,x),0),
+  round:a=>pyround(nv(a[0]),a[1]),
+  list:a=>a.length?[...iter(a[0])]:[],
+  sorted:(a,k)=>{const r=[...iter(a[0])];r.sort((x,y)=>ord('<',x,y)?-1:ord('<',y,x)?1:0);return k.reverse&&T_(k.reverse)?r.reverse():r},
+  exit:()=>{throw new Stop(true)},quit:()=>{throw new Stop(true)}});
+const TIME=new Mod(O({
+  sleep:async a=>{
+    if(a.length!=1||!isN(a[0]))throw E('TypeError','sleep() needs one number, like time.sleep(1)');
+    if(nv(a[0])<0)throw E('ValueError','sleep length must be non-negative');
+    await wait(r=>setTimeout(r,nv(a[0])*1000));return null},
+  time:()=>new F(Date.now()/1000)}));
+const sp=(s,c,l,r)=>{const cs=c==null?' \t\n\r':c;let i=0,j=s.length;if(l)while(i<j&&cs.includes(s[i]))i++;if(r)while(j>i&&cs.includes(s[j-1]))j--;return s.slice(i,j)};
+const SM=O({
+  lower:s=>s.toLowerCase(),upper:s=>s.toUpperCase(),
+  strip:(s,a)=>sp(s,a[0],1,1),lstrip:(s,a)=>sp(s,a[0],1,0),rstrip:(s,a)=>sp(s,a[0],0,1),
+  split:(s,a)=>a.length&&a[0]!==null?s.split(a[0]):s.split(/\s+/).filter(Boolean),
+  join:(s,a)=>iter(a[0]).map(x=>{if(typeof x!='string')throw E('TypeError',`sequence item: expected str instance, ${tn(x)} found`);return x}).join(s),
+  replace:(s,a)=>s.split(a[0]).join(a[1]),
+  startswith:(s,a)=>s.startsWith(a[0]),endswith:(s,a)=>s.endsWith(a[0]),
+  find:(s,a)=>s.indexOf(a[0]),
+  count:(s,a)=>a[0]===''?s.length+1:s.split(a[0]).length-1,
+  isdigit:s=>/^\d+$/.test(s),isalpha:s=>/^\p{L}+$/u.test(s),
+  title:s=>s.toLowerCase().replace(/(^|[^\p{L}])(\p{L})/gu,(m,p,c)=>p+c.toUpperCase()),
+  capitalize:s=>s.charAt(0).toUpperCase()+s.slice(1).toLowerCase(),
+  format:(s,a)=>{let i=0;return s.replace(/\{(\d*)\}/g,(m,n)=>str(a[n===''?i++:+n]))}});
+const LM=O({
+  append:(l,a)=>(l.push(a[0]),null),
+  pop:(l,a)=>{if(!l.length)throw E('IndexError','pop from empty list');const i=a.length?(a[0]<0?a[0]+l.length:a[0]):l.length-1;if(i<0||i>=l.length)throw E('IndexError','pop index out of range');return l.splice(i,1)[0]},
+  insert:(l,a)=>(l.splice(a[0],0,a[1]),null),
+  remove:(l,a)=>{const i=l.findIndex(x=>eq(x,a[0]));if(i<0)throw E('ValueError','list.remove(x): x not in list');l.splice(i,1);return null},
+  index:(l,a)=>{const i=l.findIndex(x=>eq(x,a[0]));if(i<0)throw E('ValueError',`${repr(a[0])} is not in list`);return i},
+  count:(l,a)=>l.filter(x=>eq(x,a[0])).length,
+  sort:(l,a,k)=>{l.sort((x,y)=>ord('<',x,y)?-1:ord('<',y,x)?1:0);if(k.reverse&&T_(k.reverse))l.reverse();return null},
+  reverse:l=>(l.reverse(),null),extend:(l,a)=>(l.push(...iter(a[0])),null)});
+const DM=O({
+  get:(d,a)=>{const k=key(a[0]);return d.has(k)?d.get(k):(a.length>1?a[1]:null)},
+  keys:d=>[...d.keys()],values:d=>[...d.values()],items:d=>[...d].map(e=>[...e])});
+
+/* ---------- evaluator ---------- */
+const setv=(s,k,v)=>(s.g&&s.g.has(k)?G:s).v.set(k,v);
+async function blk(b,s){for(const st of b){const r=await ex(st,s);if(r)return r}}
+async function call(f,a,k){
+  if(typeof f=='function')return f(a,k);
+  if(!(f instanceof Fn))throw E('TypeError',`'${tn(f)}' object is not callable`);
+  const ps=f.ps;
+  if(a.length>ps.length)throw E('TypeError',`${f.name}() takes ${ps.length} positional argument${ps.length==1?'':'s'} but ${a.length} were given`);
+  const sc=new Scope();
+  for(let i=0;i<ps.length;i++){
+    const q=ps[i];let v;
+    if(i<a.length)v=a[i];else if(q.n in k)v=k[q.n];else if(q.dv!==undefined)v=q.dv;
+    else throw E('TypeError',`${f.name}() missing required positional argument: '${q.n}'`);
+    sc.v.set(q.n,v)}
+  if(depth>=100)throw E('RecursionError','maximum recursion depth exceeded');
+  depth++;
+  try{const r=await blk(f.b,sc);return r&&'ret' in r?r.ret:null}finally{depth--}}
+async function ev(n,s){
+  switch(n.k){
+    case'c':return n.v;
+    case'n':{const k=n.n;
+      if(s.v.has(k))return s.v.get(k);
+      if(G.v.has(k))return G.v.get(k);
+      if(k in BI)return BI[k];
+      L=n.line;throw E('NameError',`name '${k}' is not defined`)}
+    case'fs':{let r='';for(const p of n.parts)r+=typeof p=='string'?p:fmt(await ev(p.e,s),p.fm);return r}
+    case'list':case'tuple':{const r=[];for(const x of n.items)r.push(await ev(x,s));return r}
+    case'dict':{const m=new Map();for(let i=0;i<n.ks.length;i++){const k=await ev(n.ks[i],s);m.set(key(k),await ev(n.vs[i],s))}return m}
+    case'bin':{const a=await ev(n.a,s),b=await ev(n.b,s);L=n.line;return bin(n.op,a,b)}
+    case'un':{const a=await ev(n.a,s);L=n.line;
+      if(!isN(a))throw E('TypeError',`bad operand type for unary ${n.op}: '${tn(a)}'`);
+      return n.op=='-'?(a instanceof F?new F(-a.v):-a):(a instanceof F?a:+a)}
+    case'and':{const a=await ev(n.a,s);return T_(a)?ev(n.b,s):a}
+    case'or':{const a=await ev(n.a,s);return T_(a)?a:ev(n.b,s)}
+    case'not':return!T_(await ev(n.a,s));
+    case'cmp':{let a=await ev(n.a,s);
+      for(let i=0;i<n.ops.length;i++){const b=await ev(n.rs[i],s);L=n.line;if(!cop(n.ops[i],a,b))return false;a=b}
+      return true}
+    case'tern':return T_(await ev(n.c,s))?ev(n.a,s):ev(n.b,s);
+    case'sub':{const o=await ev(n.a,s),i=await ev(n.i,s);L=n.line;return idx(o,i)}
+    case'slice':{const o=await ev(n.a,s),lo=n.lo?await ev(n.lo,s):null,hi=n.hi?await ev(n.hi,s):null;L=n.line;return slc(o,lo,hi)}
+    case'attr':{const o=await ev(n.a,s);L=n.line;
+      if(o instanceof Mod){if(n.n in o.a)return o.a[n.n];throw E('AttributeError',`module 'time' has no attribute '${n.n}'`)}
+      const tb=typeof o=='string'?SM:Array.isArray(o)?LM:o instanceof Map?DM:null;
+      if(!tb||!(n.n in tb))throw E('AttributeError',`'${tn(o)}' object has no attribute '${n.n}'`);
+      return(a,k)=>tb[n.n](o,a,k)}
+    case'call':{const f=await ev(n.f,s),a=[],k=Object.create(null);
+      for(const x of n.args)a.push(await ev(x,s));
+      for(const q in n.kw)k[q]=await ev(n.kw[q],s);
+      L=n.line;return call(f,a,k)}}}
+async function asg(t,v,s){
+  if(t.k=='n')return setv(s,t.n,v);
+  if(t.k=='tuple'){
+    L=t.line;const it=iter(v),c=t.items.length;
+    if(it.length!=c)throw E('ValueError',it.length>c?`too many values to unpack (expected ${c})`:`not enough values to unpack (expected ${c}, got ${it.length})`);
+    for(let i=0;i<c;i++)await asg(t.items[i],it[i],s);return}
+  const o=await ev(t.a,s),i=await ev(t.i,s);L=t.line;
+  if(Array.isArray(o)){
+    if(typeof i!='number')throw E('TypeError','list indices must be integers or slices, not '+tn(i));
+    const j=i<0?i+o.length:i;
+    if(j<0||j>=o.length)throw E('IndexError','list assignment index out of range');
+    o[j]=v}
+  else if(o instanceof Map)o.set(key(i),v);
+  else throw E('TypeError',`'${tn(o)}' object does not support item assignment`)}
+async function ex(n,s){
+  L=n.line;
+  if(stopped)throw new Stop();
+  if(performance.now()-lastY>30){await new Promise(r=>setTimeout(r));lastY=performance.now();if(stopped)throw new Stop()}
+  switch(n.k){
+    case'expr':await ev(n.e,s);return;
+    case'asg':{const v=await ev(n.v,s);for(const t of n.tg)await asg(t,v,s);return}
+    case'aug':{const c=await ev(n.tg,s),v=await ev(n.v,s);L=n.line;await asg(n.tg,bin(n.op,c,v),s);return}
+    case'if':return T_(await ev(n.c,s))?blk(n.b,s):blk(n.o,s);
+    case'while':
+      while(T_(await ev(n.c,s))){const r=await blk(n.b,s);if(r){if(r===BRK)break;if(r!==CNT)return r}}
+      return;
+    case'for':{
+      const v=await ev(n.it,s);L=n.line;
+      for(const x of[...iter(v)]){await asg(n.tg,x,s);const r=await blk(n.b,s);if(r){if(r===BRK)break;if(r!==CNT)return r}}
+      return}
+    case'break':return BRK;case'continue':return CNT;case'pass':return;
+    case'ret':return{ret:n.e?await ev(n.e,s):null};
+    case'def':{const ps=[];for(const p of n.ps)ps.push({n:p.n,dv:p.d?await ev(p.d,s):undefined});setv(s,n.name,new Fn(n.name,ps,n.b));return}
+    case'global':(s.g||(s.g=new Set()));n.n.forEach(x=>s.g.add(x));return;
+    case'import':
+      if(n.m!='time')throw E('ModuleNotFoundError',`No module named '${n.m}' (only the time module is available here)`);
+      setv(s,n.as,TIME);return;
+    case'from':
+      if(n.m!='time')throw E('ModuleNotFoundError',`No module named '${n.m}' (only the time module is available here)`);
+      for(const[a,b]of n.n){if(!(a in TIME.a))throw E('ImportError',`cannot import name '${a}' from 'time'`);setv(s,b,TIME.a[a])}
+      return}}
+
+/* ---------- terminal ---------- */
+const term=$('term'),ta=$('code'),LH=20;
+function out(t,c){const sp=document.createElement('span');if(c)sp.className=c;sp.textContent=t;term.appendChild(sp);term.scrollTop=term.scrollHeight}
+const ask=p=>wait(res=>{
+  out(p);
+  const i=document.createElement('input');
+  i.className='tin';i.autocomplete='off';i.spellcheck=false;
+  i.setAttribute('autocapitalize','off');i.setAttribute('autocorrect','off');
+  term.appendChild(i);i.focus();term.scrollTop=term.scrollHeight;
+  i.oninput=()=>i.style.width=Math.max(1,i.value.length+1)+'ch';
+  i.onkeydown=e=>{if(e.key=='Enter'){const v=i.value;i.remove();out(v+'\n','u');res(v)}}});
+term.onclick=()=>{if(getSelection().toString())return;const i=term.querySelector('.tin');if(i)i.focus()};
+function setBtn(){$('run').disabled=running;$('stop').disabled=!running}
+function showErr(e){
+  err=e;
+  const srcLine=(ta.value.split('\n')[e.line-1]||'').trim();
+  const syn=/Syntax|Indentation/.test(e.type);
+  out(`\n${syn?'':'Traceback (most recent call last):\n'}  File "${cur().name}", line ${e.line}\n    ${srcLine}\n${e.type}: ${e.msg}\n`,'e');
+  mark()}
+async function runCode(){
+  if(running)return;
+  save();term.textContent='';err=null;mark();
+  let ast;
+  try{ast=parse(lex(ta.value))}catch(e){if(e instanceof PyErr){showErr(e);return}throw e}
+  running=true;stopped=false;lastY=performance.now();depth=0;G=new Scope();setBtn();
+  try{await blk(ast,G);out('\n[program finished]\n','m')}
+  catch(e){
+    if(e instanceof Stop)out(e.q?'\n[program finished]\n':'\n[stopped]\n','m');
+    else if(e instanceof PyErr)showErr(e);
+    else{const rc=e instanceof RangeError;showErr(new PyErr(rc?'RecursionError':'Error',rc?'maximum recursion depth exceeded':String(e&&e.message||e),L))}}
+  finally{running=false;term.querySelectorAll('.tin').forEach(i=>i.remove());setBtn()}}
+$('run').onclick=runCode;
+$('stop').onclick=()=>{stopped=true;if(cancel)cancel()};
+
+/* ---------- editor / errors ---------- */
+function gutter(){
+  const n=ta.value.split('\n').length;let h='';
+  for(let i=1;i<=n;i++)h+=`<div${err&&err.line==i?' class="er"':''}>${i}</div>`;
+  $('gut').innerHTML=h;$('gut').scrollTop=ta.scrollTop}
+function hl(){const h=$('hl');if(!err){h.style.display='none';return}h.style.display='block';h.style.top=(8+(err.line-1)*LH-ta.scrollTop)+'px'}
+function mark(){
+  const b=$('errbar');
+  if(err){b.className='bad';b.textContent=`✖ Line ${err.line}: ${err.type}: ${err.msg}   (click to jump to the line)`}
+  else{b.className='ok';b.textContent='✔ No errors found'}
+  gutter();hl()}
+function jump(n){
+  const ls=ta.value.split('\n');let s=0;for(let i=0;i<n-1;i++)s+=ls[i].length+1;
+  ta.focus();ta.setSelectionRange(s,s+(ls[n-1]||'').length);ta.scrollTop=Math.max(0,(n-4)*LH);hl()}
+$('errbar').onclick=()=>{if(err)jump(err.line)};
+let tm;
+function onEdit(){
+  err=null;mark();clearTimeout(tm);
+  tm=setTimeout(()=>{try{parse(lex(ta.value))}catch(e){if(e instanceof PyErr)err=e;else throw e}mark()},600)}
+ta.oninput=onEdit;
+ta.onscroll=()=>{$('gut').scrollTop=ta.scrollTop;hl()};
+ta.onkeydown=e=>{
+  if(e.key=='Tab'&&!e.shiftKey){e.preventDefault();ta.setRangeText('    ',ta.selectionStart,ta.selectionEnd,'end');onEdit()}
+  else if((e.ctrlKey||e.metaKey)&&e.key=='Enter'){e.preventDefault();runCode()}};
+
+/* ---------- files & storage ---------- */
+const KEY='pyide.files.v1';
+const START=`import time
+
+print("Hi! I'm ChatBot.")
+name = input("What is your name? ")
+print("Nice to meet you, " + name + "!")
+time.sleep(1)
+
+while True:
+    msg = input("You: ").lower()
+    if msg == "bye":
+        print("Bot: Goodbye!")
+        break
+    elif "hello" in msg:
+        print("Bot: Hello again!")
+    else:
+        print("Bot: Tell me more...")
+`;
+let S={files:[{name:'main.py',code:START}],cur:0};
+try{const r=JSON.parse(localStorage.getItem(KEY));if(r&&Array.isArray(r.files)&&r.files.length){S=r;S.cur=Math.min(Math.max(S.cur|0,0),S.files.length-1)}}catch(e){}
+const cur=()=>S.files[S.cur];
+const grab=()=>{cur().code=ta.value};
+function save(){
+  grab();
+  try{localStorage.setItem(KEY,JSON.stringify(S));$('st').textContent='Saved '+new Date().toLocaleTimeString()}
+  catch(e){$('st').textContent='⚠ Could not save (storage blocked or full)'}}
+function renderFiles(){
+  const l=$('flist');l.innerHTML='';
+  S.files.forEach((f,i)=>{
+    const d=document.createElement('div');d.className='f'+(i==S.cur?' on':'');
+    const n=document.createElement('span');n.textContent=f.name;
+    const x=document.createElement('button');x.textContent='×';x.title='Delete file';
+    x.onclick=e=>{e.stopPropagation();del(i)};
+    d.append(n,x);d.onclick=()=>{if(i!=S.cur){grab();S.cur=i;load()}};l.append(d)})}
+function load(){
+  ta.value=cur().code;$('fname').value=cur().name;$('fname').classList.remove('bad');
+  err=null;mark();renderFiles();ta.scrollTop=0}
+function del(i){
+  if(S.files.length==1){alert('You need to keep at least one file.');return}
+  if(!confirm('Delete '+S.files[i].name+'?'))return;
+  grab();S.files.splice(i,1);S.cur=Math.min(i<S.cur?S.cur-1:S.cur,S.files.length-1);
+  if(i==S.cur||true)load();save()}
+$('new').onclick=()=>{
+  grab();let n=1;while(S.files.some(f=>f.name=='untitled'+n+'.py'))n++;
+  S.files.push({name:'untitled'+n+'.py',code:''});S.cur=S.files.length-1;load();save();$('fname').select()};
+$('fname').oninput=()=>{
+  const v=$('fname').value.trim(),ok=v&&!S.files.some((f,i)=>i!=S.cur&&f.name==v);
+  $('fname').classList.toggle('bad',!ok);if(ok){cur().name=v;renderFiles()}};
+$('fname').onchange=()=>{$('fname').value=cur().name;$('fname').classList.remove('bad')};
+$('fname').onkeydown=e=>{if(e.key=='Enter')$('fname').blur()};
+$('dl').onclick=()=>{
+  save();
+  const b=new Blob([JSON.stringify({files:S.files.map(f=>({name:f.name,content:f.code}))},null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='python-files.json';
+  document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
+setInterval(save,5000);
+addEventListener('beforeunload',save);
+load();setBtn();
+</script></body></html>
