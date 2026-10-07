@@ -571,7 +571,7 @@ ta.onkeydown=e=>{
 const KEY='pyide.files.v1';
 const START=`
 `;
-let S={files:[{name:'main.py',code:START}],cur:0};
+let S={files:[{name:'',code:START}],cur:0};
 try{const r=JSON.parse(localStorage.getItem(KEY));if(r&&Array.isArray(r.files)&&r.files.length){S=r;S.cur=Math.min(Math.max(S.cur|0,0),S.files.length-1)}}catch(e){}
 const cur=()=>S.files[S.cur];
 const grab=()=>{cur().code=ta.value};
