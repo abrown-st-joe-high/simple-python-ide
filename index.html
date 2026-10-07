@@ -569,22 +569,7 @@ ta.onkeydown=e=>{
 
 /* ---------- files & storage ---------- */
 const KEY='pyide.files.v1';
-const START=`import time
-
-print("Hi! I'm ChatBot.")
-name = input("What is your name? ")
-print("Nice to meet you, " + name + "!")
-time.sleep(1)
-
-while True:
-    msg = input("You: ").lower()
-    if msg == "bye":
-        print("Bot: Goodbye!")
-        break
-    elif "hello" in msg:
-        print("Bot: Hello again!")
-    else:
-        print("Bot: Tell me more...")
+const START=`
 `;
 let S={files:[{name:'main.py',code:START}],cur:0};
 try{const r=JSON.parse(localStorage.getItem(KEY));if(r&&Array.isArray(r.files)&&r.files.length){S=r;S.cur=Math.min(Math.max(S.cur|0,0),S.files.length-1)}}catch(e){}
