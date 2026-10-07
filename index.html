@@ -13,7 +13,7 @@ button.pri{background:#2d7d46;border-color:#2d7d46}
 #fname{flex:1;max-width:320px;min-width:120px;background:var(--bg);color:var(--tx);border:1px solid var(--ln);border-radius:6px;padding:6px 10px;font:14px var(--mono)}
 #fname.bad{border-color:var(--er)}
 .sp{flex:1}#st{color:var(--mu);font-size:12px}
-#main{flex:1;min-height:0;display:grid;grid-template-columns:170px 1fr 1fr}
+#main{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr}#main.fl{grid-template-columns:210px 1fr 1fr}#main:not(.fl)>aside{display:none}
 #main>*{min-width:0;min-height:0;display:flex;flex-direction:column;border-right:1px solid var(--ln)}
 .h{padding:6px 10px;background:#20222c;color:var(--mu);font-size:12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--ln)}
 .h button{padding:2px 8px;font-size:12px}
@@ -31,17 +31,31 @@ button.pri{background:#2d7d46;border-color:#2d7d46}
 .tin{background:transparent;border:0;outline:0;color:#fff;font:inherit;padding:0;width:1ch;caret-color:#fff}
 #errbar{padding:8px 12px;font:13px var(--mono);border-top:1px solid var(--ln)}
 #errbar.ok{background:#1d2a22;color:var(--ok)}#errbar.bad{background:#3a1f24;color:var(--er);cursor:pointer}
-@media(max-width:800px){#main{grid-template-columns:1fr;grid-template-rows:auto 1fr 1fr}#flist{max-height:80px}}
+[hidden]{display:none!important}
+#term .g{color:var(--ok)}#term .r{color:var(--er)}#term .y{color:#f0c674}#term .p{color:#7fb4ff}
+select{background:var(--bg);color:var(--tx);border:1px solid var(--ln);border-radius:6px;padding:3px 6px;font:inherit;max-width:120px}
+.f span{flex:1}.b{font:bold 11px var(--mono);font-style:normal;margin:0 4px;flex:none}.b.g{color:var(--ok)}.b.r{color:var(--er)}
+#brow{justify-content:flex-start;font-family:var(--mono)}
+details{position:relative}summary{cursor:pointer;padding:6px 12px;background:#33364a;border:1px solid var(--ln);border-radius:6px;list-style:none}
+.menu{position:absolute;right:0;top:36px;z-index:5;background:var(--pn);border:1px solid var(--ln);border-radius:6px;padding:10px 14px;display:flex;flex-direction:column;gap:10px;white-space:nowrap}
+@media(max-width:800px){#main{display:flex;flex-direction:column}#main>section{flex:1}#main>aside{max-height:150px}}
 </style></head><body>
 <header>
-<b>🐍 Chatbot IDE</b>
+<b>🐍 Chatbot IDE</b><button id="ftog">📁 Files ▾</button>
 <input id="fname" placeholder="file name" spellcheck="false" autocomplete="off" aria-label="File name">
 <button id="run" class="pri">▶ Run</button><button id="stop" disabled>■ Stop</button>
-<span class="sp"></span><span id="st"></span>
+<span class="sp"></span><span id="st" hidden></span>
 <button id="dl">⬇ Download all (JSON)</button>
+<details id="opts"><summary>⚙ Options</summary><div class="menu">
+<label><input type="checkbox" id="o-saved"> Show last saved time</label>
+<label><input type="checkbox" id="o-files"> Show file list</label>
+<label><input type="checkbox" id="o-git"> Learning Git mode</label>
+</div></details>
 </header>
 <div id="main">
-<aside><div class="h">Files <button id="new">+ New</button></div><div id="flist"></div></aside>
+<aside><div id="prow" class="h" hidden><select id="proj" aria-label="Project"></select><span><button id="newp" title="New project">+</button> <button id="delp" title="Delete project">🗑</button></span></div>
+<div id="brow" class="h" hidden></div>
+<div class="h">Files <button id="new">+ New</button></div><div id="flist"></div></aside>
 <section><div class="h">Code <span>Ctrl+Enter to run</span></div>
 <div id="wrap"><div id="hl"></div><div id="gut"></div>
 <textarea id="code" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" wrap="off" aria-label="Code editor"></textarea></div></section>
@@ -521,94 +535,450 @@ const ask=p=>wait(res=>{
   i.onkeydown=e=>{if(e.key=='Enter'){const v=i.value;i.remove();out(v+'\n','u');res(v)}}});
 term.onclick=()=>{if(getSelection().toString())return;const i=term.querySelector('.tin');if(i)i.focus()};
 function setBtn(){$('run').disabled=running;$('stop').disabled=!running}
+let runFile=null;
 function showErr(e){
-  err=e;
-  const srcLine=(ta.value.split('\n')[e.line-1]||'').trim();
+  const rf=runFile||cur();e.f=rf.name;err=e;
+  const srcLine=(rf.code.split('\n')[e.line-1]||'').trim();
   const syn=/Syntax|Indentation/.test(e.type);
-  out(`\n${syn?'':'Traceback (most recent call last):\n'}  File "${cur().name}", line ${e.line}\n    ${srcLine}\n${e.type}: ${e.msg}\n`,'e');
+  out(`\n${syn?'':'Traceback (most recent call last):\n'}  File "${rf.name}", line ${e.line}\n    ${srcLine}\n${e.type}: ${e.msg}\n`,'e');
   mark()}
-async function runCode(){
+async function runCode(name,fromShell){
   if(running)return;
-  save();term.textContent='';err=null;mark();
+  save();
+  const f=(typeof name=='string'&&P().files.find(x=>x.name==name))||cur();
+  runFile=f;err=null;
+  term.querySelectorAll('.cl').forEach(x=>x.remove());
+  if(S.o.git){if(!fromShell)out('$ python '+f.name+'\n','u')}else term.textContent='';
+  mark();
   let ast;
-  try{ast=parse(lex(ta.value))}catch(e){if(e instanceof PyErr){showErr(e);return}throw e}
+  try{ast=parse(lex(f.code))}
+  catch(e){if(e instanceof PyErr){showErr(e);if(S.o.git&&!fromShell)showPrompt();return}throw e}
   running=true;stopped=false;lastY=performance.now();depth=0;G=new Scope();setBtn();
   try{await blk(ast,G);out('\n[program finished]\n','m')}
   catch(e){
     if(e instanceof Stop)out(e.q?'\n[program finished]\n':'\n[stopped]\n','m');
     else if(e instanceof PyErr)showErr(e);
     else{const rc=e instanceof RangeError;showErr(new PyErr(rc?'RecursionError':'Error',rc?'maximum recursion depth exceeded':String(e&&e.message||e),L))}}
-  finally{running=false;term.querySelectorAll('.tin').forEach(i=>i.remove());setBtn()}}
-$('run').onclick=runCode;
+  finally{running=false;term.querySelectorAll('.tin').forEach(i=>i.remove());setBtn();if(S.o.git&&!fromShell)showPrompt()}}
+$('run').onclick=()=>runCode();
 $('stop').onclick=()=>{stopped=true;if(cancel)cancel()};
 
 /* ---------- editor / errors ---------- */
+const errHere=()=>err&&(!err.f||err.f===cur().name);
 function gutter(){
   const n=ta.value.split('\n').length;let h='';
-  for(let i=1;i<=n;i++)h+=`<div${err&&err.line==i?' class="er"':''}>${i}</div>`;
+  for(let i=1;i<=n;i++)h+=`<div${errHere()&&err.line==i?' class="er"':''}>${i}</div>`;
   $('gut').innerHTML=h;$('gut').scrollTop=ta.scrollTop}
-function hl(){const h=$('hl');if(!err){h.style.display='none';return}h.style.display='block';h.style.top=(8+(err.line-1)*LH-ta.scrollTop)+'px'}
+function hl(){const h=$('hl');if(!errHere()){h.style.display='none';return}h.style.display='block';h.style.top=(8+(err.line-1)*LH-ta.scrollTop)+'px'}
 function mark(){
   const b=$('errbar');
-  if(err){b.className='bad';b.textContent=`✖ Line ${err.line}: ${err.type}: ${err.msg}   (click to jump to the line)`}
+  if(err){b.className='bad';b.textContent=`✖ ${err.f&&err.f!==cur().name?err.f+' — ':''}Line ${err.line}: ${err.type}: ${err.msg}   (click to jump to the line)`}
   else{b.className='ok';b.textContent='✔ No errors found'}
   gutter();hl()}
 function jump(n){
   const ls=ta.value.split('\n');let s=0;for(let i=0;i<n-1;i++)s+=ls[i].length+1;
   ta.focus();ta.setSelectionRange(s,s+(ls[n-1]||'').length);ta.scrollTop=Math.max(0,(n-4)*LH);hl()}
-$('errbar').onclick=()=>{if(err)jump(err.line)};
+$('errbar').onclick=()=>{if(errHere())jump(err.line)};
 let tm;
 function onEdit(){
   err=null;mark();clearTimeout(tm);
-  tm=setTimeout(()=>{try{parse(lex(ta.value))}catch(e){if(e instanceof PyErr)err=e;else throw e}mark()},600)}
+  tm=setTimeout(()=>{try{parse(lex(ta.value))}catch(e){if(e instanceof PyErr){e.f=cur().name;err=e}else throw e}mark();if(S.o.git)renderFiles()},600)}
 ta.oninput=onEdit;
 ta.onscroll=()=>{$('gut').scrollTop=ta.scrollTop;hl()};
 ta.onkeydown=e=>{
   if(e.key=='Tab'&&!e.shiftKey){e.preventDefault();ta.setRangeText('    ',ta.selectionStart,ta.selectionEnd,'end');onEdit()}
   else if((e.ctrlKey||e.metaKey)&&e.key=='Enter'){e.preventDefault();runCode()}};
 
-/* ---------- files & storage ---------- */
+/* ---------- projects, files & storage ---------- */
 const KEY='pyide.files.v1';
-const START=`
+const START=`import time
+
+print("Hi! I'm ChatBot.")
+name = input("What is your name? ")
+print("Nice to meet you, " + name + "!")
+time.sleep(1)
+
+while True:
+    msg = input("You: ").lower()
+    if msg == "bye":
+        print("Bot: Goodbye!")
+        break
+    elif "hello" in msg:
+        print("Bot: Hello again!")
+    else:
+        print("Bot: Tell me more...")
 `;
-let S={files:[{name:'',code:START}],cur:0};
-try{const r=JSON.parse(localStorage.getItem(KEY));if(r&&Array.isArray(r.files)&&r.files.length){S=r;S.cur=Math.min(Math.max(S.cur|0,0),S.files.length-1)}}catch(e){}
-const cur=()=>S.files[S.cur];
+const newProj=(n,code)=>({name:n,files:[{name:'main.py',code}],cur:0,git:null});
+let S={projects:[newProj('my-project',START)],p:0,o:{}};
+try{
+  const r=JSON.parse(localStorage.getItem(KEY));
+  if(r&&Array.isArray(r.projects)&&r.projects.length)S=r;
+  else if(r&&Array.isArray(r.files)&&r.files.length)S.projects=[{name:'my-project',files:r.files,cur:r.cur|0,git:null}];
+  S.p=Math.min(Math.max(S.p|0,0),S.projects.length-1);
+  S.projects.forEach(p=>{p.cur=Math.min(Math.max(p.cur|0,0),p.files.length-1)})}catch(e){}
+S.o=Object.assign({saved:false,files:false,git:false},S.o);
+const P=()=>S.projects[S.p],cur=()=>P().files[P().cur];
 const grab=()=>{cur().code=ta.value};
+const ow=(o,k)=>Object.hasOwn(o,k);
 function save(){
   grab();
-  try{localStorage.setItem(KEY,JSON.stringify(S));$('st').textContent='Saved '+new Date().toLocaleTimeString()}
-  catch(e){$('st').textContent='⚠ Could not save (storage blocked or full)'}}
+  try{localStorage.setItem(KEY,JSON.stringify(S));$('st').textContent='Last saved '+new Date().toLocaleTimeString();$('st').hidden=!S.o.saved}
+  catch(e){$('st').textContent='⚠ Could not save (storage blocked or full)';$('st').hidden=false}}
+function badge(n){
+  const r=P().git;if(!r)return null;
+  const w=wmap(),ix=r.index,hd=headSnap(r);
+  if(!ow(ix,n)&&!ow(hd,n))return['?','r'];
+  if(ow(ix,n)&&w[n]!==ix[n])return['M','r'];
+  if(ix[n]!==hd[n])return[ow(hd,n)?'M':'A','g'];
+  return null}
+function renderProj(){
+  const g=S.o.git;$('prow').hidden=!g;$('brow').hidden=!g;if(!g)return;
+  const sel=$('proj');sel.innerHTML='';
+  S.projects.forEach((p,i)=>{const o=document.createElement('option');o.value=i;o.textContent=p.name;sel.append(o)});
+  sel.value=S.p;
+  const r=P().git;
+  $('brow').textContent=r?'⎇ '+(hname(r)||'detached at '+sh7(r.head)):'not a git repo yet — type: git init'}
 function renderFiles(){
+  renderProj();
   const l=$('flist');l.innerHTML='';
-  S.files.forEach((f,i)=>{
-    const d=document.createElement('div');d.className='f'+(i==S.cur?' on':'');
-    const n=document.createElement('span');n.textContent=f.name;
+  P().files.forEach((f,i)=>{
+    const d=document.createElement('div');d.className='f'+(i==P().cur?' on':'');
+    const n=document.createElement('span');n.textContent=f.name;d.append(n);
+    const b=S.o.git&&badge(f.name);
+    if(b){const t=document.createElement('i');t.className='b '+b[1];t.textContent=b[0];d.append(t)}
     const x=document.createElement('button');x.textContent='×';x.title='Delete file';
     x.onclick=e=>{e.stopPropagation();del(i)};
-    d.append(n,x);d.onclick=()=>{if(i!=S.cur){grab();S.cur=i;load()}};l.append(d)})}
+    d.append(x);d.onclick=()=>{if(i!=P().cur){grab();P().cur=i;load()}};l.append(d)})}
 function load(){
-  ta.value=cur().code;$('fname').value=cur().name;$('fname').classList.remove('bad');
+  const f=cur();ta.value=f.code;$('fname').value=f.name;$('fname').classList.remove('bad');
   err=null;mark();renderFiles();ta.scrollTop=0}
 function del(i){
-  if(S.files.length==1){alert('You need to keep at least one file.');return}
-  if(!confirm('Delete '+S.files[i].name+'?'))return;
-  grab();S.files.splice(i,1);S.cur=Math.min(i<S.cur?S.cur-1:S.cur,S.files.length-1);
-  if(i==S.cur||true)load();save()}
+  const fs=P().files;
+  if(fs.length==1){alert('You need to keep at least one file.');return}
+  if(!confirm('Delete '+fs[i].name+'?'))return;
+  grab();const was=cur().name;fs.splice(i,1);
+  P().cur=Math.max(0,fs.findIndex(f=>f.name==was));load();save()}
 $('new').onclick=()=>{
-  grab();let n=1;while(S.files.some(f=>f.name=='untitled'+n+'.py'))n++;
-  S.files.push({name:'untitled'+n+'.py',code:''});S.cur=S.files.length-1;load();save();$('fname').select()};
+  grab();const fs=P().files;let n=1;
+  while(fs.some(f=>f.name=='untitled'+n+'.py'))n++;
+  fs.push({name:'untitled'+n+'.py',code:''});P().cur=fs.length-1;load();save();$('fname').select()};
 $('fname').oninput=()=>{
-  const v=$('fname').value.trim(),ok=v&&!S.files.some((f,i)=>i!=S.cur&&f.name==v);
+  const v=$('fname').value.trim(),ok=v&&!P().files.some((f,i)=>i!=P().cur&&f.name==v);
   $('fname').classList.toggle('bad',!ok);if(ok){cur().name=v;renderFiles()}};
 $('fname').onchange=()=>{$('fname').value=cur().name;$('fname').classList.remove('bad')};
 $('fname').onkeydown=e=>{if(e.key=='Enter')$('fname').blur()};
 $('dl').onclick=()=>{
   save();
-  const b=new Blob([JSON.stringify({files:S.files.map(f=>({name:f.name,content:f.code}))},null,2)],{type:'application/json'});
+  const fl=p=>p.files.map(f=>({name:f.name,content:f.code}));
+  const data=S.o.git?{projects:S.projects.map(p=>({name:p.name,files:fl(p),git:p.git}))}:{files:fl(P())};
+  const b=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='python-files.json';
   document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
 setInterval(save,5000);
 addEventListener('beforeunload',save);
-load();setBtn();
+
+/* ---------- options ---------- */
+function applyOpts(){
+  $('o-saved').checked=S.o.saved;$('o-files').checked=S.o.files;$('o-git').checked=S.o.git;
+  $('st').hidden=!S.o.saved;$('main').classList.toggle('fl',S.o.files);
+  $('ftog').textContent='📁 Files '+(S.o.files?'▴':'▾');
+  renderFiles();showPrompt(false)}
+$('o-saved').onchange=e=>{S.o.saved=e.target.checked;applyOpts();save()};
+$('o-files').onchange=e=>{S.o.files=e.target.checked;applyOpts();save()};
+$('ftog').onclick=()=>{S.o.files=!S.o.files;applyOpts();save()};
+$('o-git').onchange=e=>{
+  S.o.git=e.target.checked;
+  if(S.o.git){S.o.files=true;out('Learning Git mode is on. Type help to see commands, or git init to start tracking this project.\n','m')}
+  applyOpts();save();showPrompt(true)};
+$('proj').onchange=e=>{grab();S.p=+e.target.value;load();showPrompt(false);save()};
+$('newp').onclick=()=>{
+  const n=(window.prompt('New project name:')||'').trim();
+  if(!n)return;
+  if(S.projects.some(p=>p.name==n)){alert('A project with that name already exists.');return}
+  grab();S.projects.push(newProj(n,'print("Hello!")\n'));S.p=S.projects.length-1;load();showPrompt(false);save()};
+$('delp').onclick=()=>{
+  if(S.projects.length==1){alert('You need at least one project.');return}
+  if(!confirm('Delete project '+P().name+', all its files and its git history?'))return;
+  S.projects.splice(S.p,1);S.p=Math.max(0,S.p-1);load();showPrompt(false);save()};
+
+/* ---------- learning git mode (local only) ---------- */
+let dirty=false;
+const Er=m=>out(m+'\n','r');
+const okName=n=>/^\w[\w.\/-]*$/.test(n)&&n!='__proto__';
+const hsh=s=>{let r='';for(let k=1;k<=5;k++){let h=0x811c9dc5^k;for(let i=0;i<s.length;i++)h=Math.imul(h^s.charCodeAt(i),16777619);r+=(h>>>0).toString(16).padStart(8,'0')}return r};
+const hname=r=>r.head.startsWith('ref:')?r.head.slice(4):null;
+const headHash=r=>{const b=hname(r);return b!==null?(r.br[b]||null):r.head};
+const headSnap=r=>{const h=headHash(r);return h?r.c[h].snap:{}};
+const sh7=h=>h.slice(0,7);
+const wmap=()=>{grab();return Object.fromEntries(P().files.map(f=>[f.name,f.code]))};
+const same=(a,b)=>{const k=Object.keys(a);return k.length==Object.keys(b).length&&k.every(n=>ow(b,n)&&a[n]===b[n])};
+function touch(was){
+  if(!P().files.length)P().files.push({name:'untitled.py',code:''});
+  P().cur=Math.max(0,P().files.findIndex(x=>x.name==was));dirty=true}
+function setFile(n,code){const x=P().files.find(x=>x.name==n);x?x.code=code:P().files.push({name:n,code})}
+function args(a){
+  const ar=[],f=new Set();let msg=null;
+  for(let i=1;i<a.length;i++){const x=a[i];
+    if(x=='-m'||x=='-am'){msg=a[++i]??null;if(x=='-am')f.add('-a')}
+    else if(x[0]=='-'&&x.length>1)f.add(x);else ar.push(x)}
+  return{ar,f,msg}}
+function resolve(r,x){
+  const m=/^(.*?)(?:~(\d+))?$/.exec(x),b=m[1],n=+(m[2]||0);let h=null;
+  if(b=='HEAD')h=headHash(r);
+  else if(ow(r.br,b))h=r.br[b];
+  else if(ow(r.tags,b))h=r.tags[b];
+  else if(b.length>=4){const k=Object.keys(r.c).filter(k=>k.startsWith(b));if(k.length==1)h=k[0]}
+  for(let i=0;h&&i<n;i++)h=r.c[h].p;
+  return h||null}
+function stat(r){
+  const w=wmap(),ix=r.index,hd=headSnap(r),S1=[],S2=[],U=[];
+  for(const n of[...new Set([...Object.keys(ix),...Object.keys(hd)])].sort()){
+    if(!ow(hd,n)&&ow(ix,n))S1.push(['new file',n]);
+    else if(ow(hd,n)&&!ow(ix,n))S1.push(['deleted',n]);
+    else if(hd[n]!==ix[n])S1.push(['modified',n])}
+  for(const n of Object.keys(ix).sort()){
+    if(!ow(w,n))S2.push(['deleted',n]);else if(w[n]!==ix[n])S2.push(['modified',n])}
+  for(const n of Object.keys(w).sort())if(!ow(ix,n))U.push(n);
+  return{S1,S2,U}}
+function ldiff(a,b){
+  const x=a===''?[]:a.split('\n'),y=b===''?[]:b.split('\n'),n=x.length,m=y.length;
+  const d=Array.from({length:n+1},()=>new Array(m+1).fill(0));
+  for(let i=n-1;i>=0;i--)for(let j=m-1;j>=0;j--)d[i][j]=x[i]==y[j]?d[i+1][j+1]+1:Math.max(d[i+1][j],d[i][j+1]);
+  const o=[];let i=0,j=0;
+  while(i<n&&j<m){if(x[i]==y[j]){o.push([' ',x[i]]);i++;j++}else if(d[i+1][j]>=d[i][j+1])o.push(['-',x[i++]]);else o.push(['+',y[j++]])}
+  while(i<n)o.push(['-',x[i++]]);
+  while(j<m)o.push(['+',y[j++]]);
+  return o}
+function showDiff(f,a,b){
+  out(`diff --git a/${f} b/${f}\n`,'y');
+  if(a===undefined)out('new file\n','m');
+  if(b===undefined)out('deleted file\n','m');
+  const o=ldiff(a??'',b??''),keep=o.map((l,i)=>o.slice(Math.max(0,i-2),i+3).some(z=>z[0]!=' '));
+  let gap=false;
+  o.forEach((l,i)=>{
+    if(!keep[i]){gap=true;return}
+    if(gap){out('...\n','m');gap=false}
+    out(l[0]+l[1]+'\n',l[0]=='+'?'g':l[0]=='-'?'r':'')})}
+function switchTo(r,snap,head){
+  const w=wmap(),hd=headSnap(r),ix=r.index,bad=[],was=cur().name;
+  const ns=[...new Set([...Object.keys(hd),...Object.keys(snap)])].filter(n=>hd[n]!==snap[n]);
+  for(const n of ns){
+    const tracked=ow(ix,n)||ow(hd,n);
+    if(tracked?(ix[n]!==hd[n]||(ow(ix,n)&&w[n]!==ix[n])):(ow(w,n)&&w[n]!==snap[n]))bad.push(n)}
+  if(bad.length){
+    Er('error: Your local changes to these files would be overwritten:');
+    bad.forEach(n=>out('        '+n+'\n'));
+    out('Commit them (git add + git commit) or undo them (git restore <file>) first.\n');return false}
+  for(const n of ns){if(ow(snap,n))setFile(n,snap[n]);else P().files=P().files.filter(x=>x.name!=n)}
+  r.index={...snap};r.head=head;touch(was);return true}
+const HELP=`Shell commands:  ls  cat <file>  touch <file>  rm <file>  python <file>  clear  help
+Git commands (all local - no push/pull):
+  git init                          start tracking this project
+  git status                        what has changed?
+  git add <file> | .                stage changes for the next commit
+  git commit -m "message"           save a snapshot  (-am also stages tracked files)
+  git log [--oneline]               history of commits
+  git diff [--staged] [file]        line-by-line changes
+  git branch [name]                 list or create a branch  (-d name deletes one)
+  git checkout <branch|tag|hash>    switch to it  (-b name creates + switches)
+  git restore [--staged] <file>     undo changes  (--source=<ref> gets an older version)
+  git reset [--hard] [ref]          unstage, or move back to an earlier commit
+  git tag [name] [commit]           list or label a commit  (-d name deletes one)
+  git merge <branch>                fast-forward merges only
+  git rm <file>                     delete a file and stage the deletion
+Tip: HEAD~1 means "one commit before HEAD".
+`;
+function git(a){
+  const c=a[0];
+  if(!c||c=='help'||c=='--help'){out(HELP);return}
+  const r=P().git;
+  if(c=='init'){
+    if(r)out('Reinitialized existing Git repository\n');
+    else{P().git={head:'ref:main',br:{main:null},c:{},tags:{},index:{}};out(`Initialized empty Git repository in ${P().name}/.git/\n`)}
+    return}
+  if(!r){Er("fatal: not a git repository (run 'git init' first)");return}
+  const{ar,f,msg}=args(a),w=wmap(),hd=headSnap(r),hh=headHash(r),b=hname(r),was=cur().name;
+  switch(c){
+    case'status':{
+      const s=stat(r);
+      out(b?`On branch ${b}\n`:`HEAD detached at ${sh7(hh)}\n`);
+      if(!hh)out('\nNo commits yet\n');
+      if(s.S1.length){out('\nChanges to be committed:\n  (use "git restore --staged <file>..." to unstage)\n');s.S1.forEach(([t,n])=>out(`\t${t}:   ${n}\n`,'g'))}
+      if(s.S2.length){out('\nChanges not staged for commit:\n  (use "git add <file>..." to update what will be committed)\n  (use "git restore <file>..." to discard changes)\n');s.S2.forEach(([t,n])=>out(`\t${t}:   ${n}\n`,'r'))}
+      if(s.U.length){out('\nUntracked files:\n  (use "git add <file>..." to include in what will be committed)\n');s.U.forEach(n=>out(`\t${n}\n`,'r'))}
+      if(!s.S1.length&&!s.S2.length&&!s.U.length)out(hh?'\nnothing to commit, working tree clean\n':'\nnothing to commit (create files and use "git add" to track them)\n');
+      else if(!s.S1.length)out(s.S2.length?'\nno changes added to commit (use "git add" and/or "git commit -a")\n':'\nnothing added to commit but untracked files present (use "git add" to track)\n');
+      return}
+    case'add':{
+      if(!ar.length){out('Nothing specified, nothing added. (try: git add .)\n');return}
+      const names=ar.includes('.')||f.has('-A')||f.has('--all')?[...new Set([...Object.keys(w),...Object.keys(r.index)])]:ar;
+      for(const n of names){
+        if(ow(w,n))r.index[n]=w[n];
+        else if(ow(r.index,n))delete r.index[n];
+        else Er(`fatal: pathspec '${n}' did not match any files`)}
+      return}
+    case'commit':{
+      if(!msg){Er('Aborting commit: add a message, like  git commit -m "my message"');return}
+      if(f.has('-a'))for(const n of Object.keys(r.index)){if(ow(w,n))r.index[n]=w[n];else delete r.index[n]}
+      if(same(r.index,hd)){const s=stat(r);out(s.S2.length||s.U.length?'nothing staged to commit - use "git add <file>" first\n':'nothing to commit, working tree clean\n');return}
+      const snap={...r.index},t=Date.now(),h=hsh(JSON.stringify([snap,hh,msg,t]));
+      r.c[h]={msg,p:hh,snap,t};
+      if(b!==null)r.br[b]=h;else r.head=h;
+      const ch=[...new Set([...Object.keys(snap),...Object.keys(hd)])].filter(n=>snap[n]!==hd[n]).length;
+      out(`[${b||'detached HEAD'}${hh?'':' (root-commit)'} ${sh7(h)}] ${msg}\n ${ch} file${ch==1?'':'s'} changed\n`);return}
+    case'log':{
+      if(!hh){Er(`fatal: your current branch '${b}' does not have any commits yet`);return}
+      const one=f.has('--oneline');
+      const deco=x=>{
+        const d=[];
+        if(hh==x)d.push(b?'HEAD -> '+b:'HEAD');
+        for(const k in r.br)if(r.br[k]==x&&k!=b)d.push(k);
+        for(const k in r.tags)if(r.tags[k]==x)d.push('tag: '+k);
+        return d.length?' ('+d.join(', ')+')':''};
+      for(let h=hh;h;h=r.c[h].p){
+        const k=r.c[h];
+        if(one){out(sh7(h)+deco(h),'y');out(' '+k.msg+'\n')}
+        else{out(`commit ${h}${deco(h)}\n`,'y');out(`Date:   ${new Date(k.t).toLocaleString()}\n\n    ${k.msg}\n\n`)}}
+      return}
+    case'diff':{
+      const st=f.has('--staged')||f.has('--cached'),A=st?hd:r.index,B=st?r.index:w;
+      const ns=ar.length?ar:[...new Set([...Object.keys(A),...(st?Object.keys(B):[])])].sort();
+      for(const n of ns){const x=ow(A,n)?A[n]:undefined,y=ow(B,n)?B[n]:undefined;if(x!==y)showDiff(n,x,y)}
+      return}
+    case'branch':{
+      if(!ar.length){
+        if(!b)out(`* (HEAD detached at ${sh7(hh)})\n`,'g');
+        Object.keys(r.br).sort().forEach(k=>out((k==b?'* ':'  ')+k+'\n',k==b?'g':''));return}
+      if(f.has('-d')||f.has('-D')){
+        for(const k of ar){
+          if(!ow(r.br,k))Er(`error: branch '${k}' not found.`);
+          else if(k==b)Er(`error: cannot delete branch '${k}' - you are on it`);
+          else{delete r.br[k];out(`Deleted branch ${k}\n`)}}
+        return}
+      const nm=ar[0];
+      if(!okName(nm)){Er(`fatal: '${nm}' is not a valid branch name`);return}
+      if(ow(r.br,nm)){Er(`fatal: a branch named '${nm}' already exists`);return}
+      const at=ar[1]?resolve(r,ar[1]):hh;
+      if(!at){Er(hh?`fatal: not a valid object name: '${ar[1]}'`:'fatal: make a first commit before creating branches');return}
+      r.br[nm]=at;return}
+    case'checkout':case'switch':{
+      if(f.has('-b')||f.has('-c')){
+        const nm=ar[0];
+        if(!nm||!okName(nm)){Er('fatal: give a valid new branch name, e.g. git checkout -b my-branch');return}
+        if(ow(r.br,nm)){Er(`fatal: a branch named '${nm}' already exists`);return}
+        if(!hh){Er('fatal: make a first commit before creating branches');return}
+        r.br[nm]=hh;r.head='ref:'+nm;out(`Switched to a new branch '${nm}'\n`);return}
+      const t=ar[0];
+      if(!t){Er('fatal: say where to go, e.g. git checkout main');return}
+      if(ow(r.br,t)){
+        if(b===t){out(`Already on '${t}'\n`);return}
+        const h=r.br[t];
+        if(switchTo(r,h?r.c[h].snap:{},'ref:'+t))out(`Switched to branch '${t}'\n`);return}
+      const h=resolve(r,t);
+      if(h){
+        if(switchTo(r,r.c[h].snap,h))out(`Note: switching to '${t}'.\n\nYou are in 'detached HEAD' state. Changes made here will be lost unless you\ncreate a branch:  git checkout -b <new-branch-name>\n\nHEAD is now at ${sh7(h)} ${r.c[h].msg}\n`);
+        return}
+      if(c=='checkout'&&(ow(r.index,t)||ow(hd,t))){git(['restore',t]);return}
+      Er(`error: pathspec '${t}' did not match any file(s) known to git`);return}
+    case'restore':{
+      const st=f.has('--staged')||f.has('-S'),wt=f.has('--worktree')||f.has('-W')||!st;
+      const sa=[...f].find(x=>x.startsWith('--source='));let src=null;
+      if(sa){src=resolve(r,sa.slice(9));if(!src){Er(`fatal: could not resolve ${sa.slice(9)}`);return}}
+      if(!ar.length){Er('fatal: you must say which file(s) to restore, e.g. git restore main.py');return}
+      const from=src?r.c[src].snap:(st?hd:r.index);
+      const names=ar.includes('.')?[...new Set([...Object.keys(r.index),...Object.keys(hd)])]:ar;
+      for(const n of names){
+        if(!ow(from,n)&&!ow(r.index,n)&&!ow(hd,n)){Er(`error: pathspec '${n}' did not match any file(s) known to git`);continue}
+        if(st){if(ow(from,n))r.index[n]=from[n];else delete r.index[n]}
+        if(wt){if(ow(from,n))setFile(n,from[n]);else P().files=P().files.filter(x=>x.name!=n)}}
+      touch(was);return}
+    case'reset':{
+      const t0=ar[0],isRef=t0?resolve(r,t0):null,hard=f.has('--hard'),soft=f.has('--soft');
+      if(t0&&!isRef&&!hard){for(const n of ar){if(ow(hd,n))r.index[n]=hd[n];else delete r.index[n]}return}
+      if(!t0&&!hard&&!soft){r.index={...hd};return}
+      const tg=t0?isRef:hh;
+      if(!tg){Er(`fatal: ambiguous argument '${t0||'HEAD'}': unknown revision`);return}
+      const sn=r.c[tg].snap,old={...hd,...r.index};
+      if(b!==null)r.br[b]=tg;else r.head=tg;
+      if(soft)return;
+      r.index={...sn};
+      if(hard){
+        for(const n of Object.keys(old))if(!ow(sn,n))P().files=P().files.filter(x=>x.name!=n);
+        for(const n of Object.keys(sn))setFile(n,sn[n]);
+        touch(was);out(`HEAD is now at ${sh7(tg)} ${r.c[tg].msg}\n`)}
+      return}
+    case'tag':{
+      if(f.has('-d')){for(const k of ar){if(ow(r.tags,k)){delete r.tags[k];out(`Deleted tag '${k}'\n`)}else Er(`error: tag '${k}' not found.`)}return}
+      if(!ar.length){Object.keys(r.tags).sort().forEach(k=>out(k+'\n'));return}
+      const h=ar[1]?resolve(r,ar[1]):hh;
+      if(!h){Er('fatal: no commit to tag yet');return}
+      if(!okName(ar[0])){Er(`fatal: '${ar[0]}' is not a valid tag name`);return}
+      if(ow(r.tags,ar[0])){Er(`fatal: tag '${ar[0]}' already exists`);return}
+      r.tags[ar[0]]=h;return}
+    case'merge':{
+      const t=ar[0],th=t&&resolve(r,t);
+      if(!th){Er(`merge: ${t||'(nothing)'} - not something we can merge`);return}
+      if(b===null){Er('merge: switch to a branch first');return}
+      if(th===hh){out('Already up to date.\n');return}
+      let x=th;while(x&&x!==hh)x=r.c[x].p;
+      if(hh&&x!==hh){
+        let y=hh;while(y&&y!==th)y=r.c[y].p;
+        if(y===th)out('Already up to date.\n');else Er('Not possible to fast-forward - this simplified Git only supports fast-forward merges.');
+        return}
+      if(switchTo(r,r.c[th].snap,r.head)){r.br[b]=th;out(`Updating ${hh?sh7(hh):'(none)'}..${sh7(th)}\nFast-forward\n`)}
+      return}
+    case'rm':{
+      for(const n of ar){
+        if(!ow(r.index,n)){Er(`fatal: pathspec '${n}' did not match any files`);continue}
+        delete r.index[n];P().files=P().files.filter(x=>x.name!=n);out(`rm '${n}'\n`)}
+      touch(was);return}
+    default:Er(`git: '${c}' is not a git command. Type help to see the ones available here.`)}}
+
+/* ---------- command line (git mode) ---------- */
+const hist=[];let hi=0;
+async function sh(line){
+  grab();
+  const tk=[...line.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map(m=>m[1]??m[2]??m[3]),c=tk[0],fs=P().files;
+  try{
+    if(!c);
+    else if(c=='git')git(tk.slice(1));
+    else if(c=='help')out(HELP);
+    else if(c=='clear')term.textContent='';
+    else if(c=='ls')out(fs.map(f=>f.name).join('  ')+'\n');
+    else if(c=='cat'){const f=fs.find(x=>x.name==tk[1]);if(f)out(f.code+(!f.code||f.code.endsWith('\n')?'':'\n'));else Er(`cat: ${tk[1]||''}: No such file`)}
+    else if(c=='touch'){
+      if(!tk[1]||!/^[\w.\-]+$/.test(tk[1]))Er('usage: touch <file name>');
+      else if(!fs.some(x=>x.name==tk[1]))fs.push({name:tk[1],code:''})}
+    else if(c=='rm'){
+      const i=fs.findIndex(x=>x.name==tk[1]);
+      if(i<0)Er(`rm: cannot remove '${tk[1]||''}': No such file`);
+      else if(fs.length==1)Er('rm: cannot remove the last file in a project');
+      else{const was=cur().name;fs.splice(i,1);touch(was)}}
+    else if(c=='python'||c=='python3'){
+      if(!fs.some(x=>x.name==tk[1]))Er(`python: can't open file '${tk[1]||''}'`);
+      else await runCode(tk[1],true)}
+    else Er(`${c}: command not found (type help)`)}
+  catch(e){Er('Error: '+(e&&e.message||e))}
+  if(dirty){dirty=false;load()}else renderFiles()}
+function showPrompt(focus){
+  term.querySelectorAll('.cl').forEach(x=>x.remove());
+  if(!S.o.git||running)return;
+  const w=document.createElement('span');w.className='cl';
+  const lab=document.createElement('span');lab.className='p';
+  const r=P().git;
+  lab.textContent=P().name+(r?' ('+(hname(r)||sh7(r.head))+')':'')+' $ ';
+  const i=document.createElement('input');
+  i.className='tin';i.autocomplete='off';i.spellcheck=false;
+  i.setAttribute('autocapitalize','off');i.setAttribute('autocorrect','off');
+  i.oninput=()=>{i.style.width=Math.max(1,i.value.length+1)+'ch'};
+  i.onkeydown=async e=>{
+    if(e.key=='Enter'){
+      const v=i.value;w.remove();out(lab.textContent,'p');out(v+'\n','u');
+      if(v.trim())hist.push(v);
+      hi=hist.length;await sh(v);showPrompt(true)}
+    else if(e.key=='ArrowUp'&&hi>0){i.value=hist[--hi];i.oninput();e.preventDefault()}
+    else if(e.key=='ArrowDown'){hi=Math.min(hi+1,hist.length);i.value=hist[hi]||'';i.oninput();e.preventDefault()}};
+  w.append(lab,i);term.appendChild(w);term.scrollTop=term.scrollHeight;
+  if(focus)i.focus()}
+load();applyOpts();setBtn();
 </script></body></html>
